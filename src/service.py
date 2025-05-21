@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Основной сервис: бесконечно слушает папку .pic (production) или обрабатывает все изображения из test_images_dir (test_mode),
-применяет дисторсию и перспективу, строит engine (если нужно), выполняет инференс и сохраняет JSON.
+Основной сервис:
+  • production‑режим — слушает папку с .pic, извлекает последний JPEG и запускает ONNX‑инференс.
+  • test_mode       — обходит изображения в test_images_dir и выполняет тот же пайплайн.
+
+Результаты (JSON + debug‑оверлеи) сохраняются в output_dir.
 """
+import os
 import time
+import json
 import yaml
 import logging
 import mmap
@@ -17,7 +22,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from src.preprocessing import DistortionCorrector, PerspectiveTransformer
-# from trt_service import EngineBuilder, TRTInference
+from src.inference import ONNXInference
 
 
 class PipelineHandler(FileSystemEventHandler):
@@ -25,20 +30,22 @@ class PipelineHandler(FileSystemEventHandler):
         super().__init__()
         self.cfg = cfg
         self.input_dir = Path(cfg['input_dir'])
-        self.output_dir = Path(cfg.get('output_dir', '.'))
+        self.output_dir = Path(cfg.get('output_dir', './results'))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Предобработка
         self.dist_corr = DistortionCorrector(cfg)
         self.persp = PerspectiveTransformer(cfg)
 
-        # self.engine_builder = EngineBuilder(cfg_path=cfg['config_path'])
-        # self.inferer = TRTInference(cfg_path=cfg['config_path'])
+        # ONNX‑инференс (GPU/CPU via providers)
+        self.inferer = ONNXInference(cfg_path=cfg['config_path'])
 
+    # production: callback when .pic closed
     def on_closed(self, event):
         src = Path(event.src_path)
         if src.suffix.lower() != '.pic':
             return
-        # ждём окончания записи
+        # wait until file stops growing
         size_prev = -1
         while src.stat().st_size != size_prev:
             size_prev = src.stat().st_size
@@ -50,6 +57,7 @@ class PipelineHandler(FileSystemEventHandler):
         logging.info(f"Extracted JPEG: {jpg.name}")
         self.process_jpg(jpg)
 
+    # -------- helpers --------
     def extract_last_jpeg(self, pic_path: Path) -> Optional[Path]:
         with open(pic_path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             end = mm.rfind(b"\xFF\xD9")
@@ -67,53 +75,47 @@ class PipelineHandler(FileSystemEventHandler):
 
     def process_jpg(self, jpg_path: Path):
         try:
-            # коррекция дисторсии
+            # 1) Distortion correction
             frame = cv2.imread(str(jpg_path))
             undist = self.dist_corr.correct(frame)
-            # коррекция перспективы
+            # 2) Perspective warp
             warped, scale = self.persp.transform(undist)
-            print(scale)
             warped_path = self.output_dir / f"{jpg_path.stem}_warped.jpg"
             cv2.imwrite(str(warped_path), warped)
-            # # билд engine
-            # self.engine_builder.build()
-            # # инференс
-            # result = self.inferer.infer(str(warped_path))
-            # result['scale'] = scale
-            # # сохраняем JSON
-            # jpath = self.output_dir / f"{jpg_path.stem}.json"
-            # with open(jpath, 'w') as jf:
-            #     json.dump(result, jf, ensure_ascii=False, indent=2)
-            # logging.info(f"Result saved: {jpath.name}")
+            # 3) ONNX inference
+            result = self.inferer.infer(str(warped_path))
+            result['scale'] = scale
+            # 4) Save JSON
+            jpath = self.output_dir / f"{jpg_path.stem}.json"
+            with open(jpath, 'w') as jf:
+                json.dump(result, jf, ensure_ascii=False, indent=2)
+            logging.info(f"Result saved: {jpath.name}")
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")
 
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S")
+
     cfg = yaml.safe_load(open('config.yaml', 'r'))
     cfg['config_path'] = 'config.yaml'
 
-    test_mode = bool(cfg.get('test_mode', False))
     handler = PipelineHandler(cfg)
 
-    if test_mode:
+    if cfg.get('test_mode', False):
         test_dir = Path(cfg['test_images_dir'])
-        logging.info(f"Test mode ON: processing all images in {test_dir}")
+        logging.info(f"Test mode ON: processing images from {test_dir}")
         for img in sorted(test_dir.iterdir()):
-            if img.suffix.lower() in ['.jpg', '.png']:  # любые форматы
-                logging.info(f"Processing test image: {img.name}")
+            if img.suffix.lower() in ['.jpg', '.png']:
                 handler.process_jpg(img)
         return
 
     observer = Observer()
     observer.schedule(handler, path=cfg['input_dir'], recursive=False)
     observer.start()
-    logging.info(f"Watching {cfg['input_dir']} for new .pic files...")
+    logging.info(f"Watching {cfg['input_dir']} for .pic files…  Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)

@@ -22,14 +22,9 @@ real_width: 283.0    # см
 real_height: 138.0 # см
 
 # ONNX → TensorRT
-onnx_path:        ./mask_rcnn_r50fpn3x_1333_800_bs1.onnx
-engine_path:      ./mask_rcnn_r50fpn3x_1333_800_bs1.trt
-max_workspace_size: 1073741824  # в байтах (1 GiB)
-fp16:             true         # true для FP16
-
-
-# Инференс
-input_shape:     [3, 800, 1333]  # [C, H, W]
-debug:            true         # сохранять overlay-картинки
-debug_output:     ./debug      # папка для debug-изображений
-overlay_color:    [0, 255, 0]  # цвет маски BGR
+onnx_path:        ./weights/mask_rcnn_r50fpn3x_1333_800_bs1_fixed.onnx
+input_shape: [3, 800, 800]
+providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]   # сначала GPU
+debug: true
+debug_output: ./debug
+overlay_color: [0, 255, 0]

@@ -1,25 +1,21 @@
-# 1. Базовый образ с TensorRT и Python3
-FROM nvcr.io/nvidia/tensorrt:23.02-py3
+# CUDA Runtime с Ubuntu 22.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
-# 2. Обновляем пакеты и ставим системные зависимости
+# Системные зависимости
 RUN apt-get update && apt-get install -y \
-    python3-opencv \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+    python3-pip libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
 
-# 3. Устанавливаем необходимые Python‑библиотеки
-RUN pip3 install --no-cache-dir \
-    numpy \
-    onnx \
-    onnx-tensorrt \
-    pycuda \
-    # + любые ваши зависимости, например:
-    watchdog
+# --- python ---
+# 1) onnxruntime-gpu тащит себе numpy-1.26.x как зависимость
+RUN pip3 install --no-cache-dir onnx onnxruntime-gpu==1.22.0 
 
-# 4. Создаём рабочую директорию и копируем в неё ваш код
+# 2) гарантируем, что версия numpy < 2
+RUN pip3 install --no-cache-dir 'numpy<2.0' pyyaml watchdog opencv-python-headless
+
+# Код приложения
 WORKDIR /app
-COPY ./code /app
+COPY ./ /app
 
-# 5. Указываем точку входа — просто запускаем ваш главный скрипт
-#    Предполагаем, что внутри app.py у вас есть цикл обработки кадров
-ENTRYPOINT ["python3", "app.py"]
+# Запуск пакета src
+ENTRYPOINT ["python3", "-m", "src"]
