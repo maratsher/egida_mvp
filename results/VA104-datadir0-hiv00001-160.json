@@ -1,5 +1,9 @@
 {
   "width_cm": 207.0,
   "height_cm": 106.9,
-  "area_m2": 2.15
+  "area_total_m2": 2.155,
+  "area_first_m2": 2.008,
+  "area_second_m2": 0.146,
+  "first_pct": 93.2,
+  "second_pct": 6.8
 }

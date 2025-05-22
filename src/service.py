@@ -41,9 +41,11 @@ class PipelineHandler(FileSystemEventHandler):
         self.persp = PerspectiveTransformer(cfg)
         self.seg = Yolov8SegONNX(cfg)
         self.post = ProfileMetrics(
+            width_threshold=cfg.get("width_threshold", 0.8),
             font_scale=cfg.get("font_scale", 1.2),
             thickness=cfg.get("font_thickness", 2),
-            color=tuple(cfg.get("overlay_color", [0, 255, 0])),
+            color_first=tuple(cfg.get("color_first",  [0, 255, 0])),
+            color_second=tuple(cfg.get("color_second", [0, 165, 255])),
         )
 
     # -------------------- production-callback ------------------------------
