@@ -3,6 +3,8 @@ input_dir: ./test_images              # где слушаем .pic
 output_dir: ./results
 test_mode: true             # или false
 test_images_dir: ./test    # папка с тестовыми изображениями    
+
+# Препроцесснг
 camera_matrix:
   - [8049.984331021995, 0.0, 1470.9594033192748]
   - [0.0, 8031.233316708024, 1172.2674105508036]
@@ -28,3 +30,8 @@ conf_thres: 0.7
 iou_thres: 0.5
 device: 0                 # GPU ID
 debug: true               # сохранять overlay *.jpg
+
+# отрисовка метрик
+font_scale: 1.4
+font_thickness: 2
+overlay_color: [255, 255, 255]

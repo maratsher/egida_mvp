@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Основной сервис:
-  • production‑режим — слушает папку с .pic, извлекает последний JPEG и запускает ONNX‑инференс.
+  • production-режим — слушает папку с .pic, извлекает последний JPEG и запускает весь пайплайн.
   • test_mode       — обходит изображения в test_images_dir и выполняет тот же пайплайн.
 
-Результаты (JSON + debug‑оверлеи) сохраняются в output_dir.
+Результаты (JSON + маска + overlay + warped) сохраняются в output_dir.
 """
-import os
 import time
 import json
 import yaml
@@ -16,110 +15,143 @@ import mmap
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-import cv2
 
+import cv2
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from src.preprocessing import DistortionCorrector, PerspectiveTransformer
 from src.inference import Yolov8SegONNX
+from src.postprocessing import ProfileMetrics
 
+
+# --------------------------------------------------------------------------- #
+#  Обработчик файлов .pic                                                     #
+# --------------------------------------------------------------------------- #
 class PipelineHandler(FileSystemEventHandler):
     def __init__(self, cfg: dict):
         super().__init__()
         self.cfg = cfg
-        self.input_dir = Path(cfg['input_dir'])
-        self.output_dir = Path(cfg.get('output_dir', './results'))
+        self.input_dir = Path(cfg["input_dir"])
+        self.output_dir = Path(cfg.get("output_dir", "./results"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Предобработка
+        # --- подготовка стадий ---
         self.dist_corr = DistortionCorrector(cfg)
         self.persp = PerspectiveTransformer(cfg)
-
         self.seg = Yolov8SegONNX(cfg)
+        self.post = ProfileMetrics(
+            font_scale=cfg.get("font_scale", 1.2),
+            thickness=cfg.get("font_thickness", 2),
+            color=tuple(cfg.get("overlay_color", [0, 255, 0])),
+        )
 
-    # production: callback when .pic closed
+    # -------------------- production-callback ------------------------------
     def on_closed(self, event):
         src = Path(event.src_path)
-        if src.suffix.lower() != '.pic':
+        if src.suffix.lower() != ".pic":
             return
-        # wait until file stops growing
+
+        # ждём, пока файл полностью запишется
         size_prev = -1
         while src.stat().st_size != size_prev:
             size_prev = src.stat().st_size
             time.sleep(0.1)
+
         jpg = self.extract_last_jpeg(src)
         if not jpg:
             logging.error(f"JPEG not found in {src.name}")
             return
+
         logging.info(f"Extracted JPEG: {jpg.name}")
         self.process_jpg(jpg)
 
-    # -------- helpers --------
+    # ------------------------ helpers --------------------------------------
     def extract_last_jpeg(self, pic_path: Path) -> Optional[Path]:
-        with open(pic_path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+        with open(pic_path, "rb") as f, mmap.mmap(
+            f.fileno(), 0, access=mmap.ACCESS_READ
+        ) as mm:
             end = mm.rfind(b"\xFF\xD9")
             if end == -1:
                 return None
             start = mm.rfind(b"\xFF\xD8", 0, end)
             if start == -1:
                 return None
+
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             out_name = f"{pic_path.stem}_{ts}.jpg"
-            outp = self.output_dir / out_name
-            with open(outp, 'wb') as o:
-                o.write(mm[start:end+2])
-            return outp
+            out_path = self.output_dir / out_name
+            with open(out_path, "wb") as o:
+                o.write(mm[start : end + 2])
+            return out_path
 
+    # -------------------- основной пайплайн --------------------------------
     def process_jpg(self, jpg_path: Path):
         try:
-            # 1) Distortion correction
+            # 1) Коррекция дисторсии
             frame = cv2.imread(str(jpg_path))
             undist = self.dist_corr.correct(frame)
-            # 2) Perspective warp
+
+            # 2) Перспективное выравнивание
             warped, scale = self.persp.transform(undist)
+            cv2.imwrite(
+                str(self.output_dir / f"{jpg_path.stem}_warped.png"), warped
+            )
 
-            warped_path = self.output_dir / f"{jpg_path.stem}_warped.png"
-            cv2.imwrite(str(warped_path), warped)
-
-            # 3) SEGMENTATION
+            # 3) Сегментация
             mask, overlay = self.seg(warped)
             if mask is None:
                 logging.warning(f"No mask found for {jpg_path.name}")
                 return
 
-            # ---------- сохранение ----------
-            mask_path = self.output_dir / f"{jpg_path.stem}_mask.png"
-            cv2.imwrite(str(mask_path), mask)
+            # 4) Пост-процессинг (метрики + финальный overlay)
+            metrics, overlay = self.post(mask, scale, warped, overlay)
 
-            if overlay is not None:
-                dbg_path  = self.output_dir / f"{jpg_path.stem}_overlay.jpg"
-                cv2.imwrite(str(dbg_path), overlay)
+            # 5) Сохранения
+            cv2.imwrite(
+                str(self.output_dir / f"{jpg_path.stem}_mask.png"), mask
+            )
+            cv2.imwrite(
+                str(self.output_dir / f"{jpg_path.stem}_overlay.jpg"), overlay
+            )
+            with open(
+                self.output_dir / f"{jpg_path.stem}.json", "w", encoding="utf-8"
+            ) as jf:
+                json.dump(metrics, jf, ensure_ascii=False, indent=2)
+
+            logging.info(f"{jpg_path.name}: {metrics}")
 
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")
 
 
+# --------------------------------------------------------------------------- #
+#  Точка входа                                                                #
+# --------------------------------------------------------------------------- #
 def main():
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s: %(message)s",
-                        datefmt="%Y-%m-%d %H:%M:%S")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-    cfg = yaml.safe_load(open('config.yaml', 'r'))
-    cfg['config_path'] = 'config.yaml'
+    cfg = yaml.safe_load(open("config.yaml", "r"))
+    cfg["config_path"] = "config.yaml"
 
     handler = PipelineHandler(cfg)
 
-    if cfg.get('test_mode', False):
-        test_dir = Path(cfg['test_images_dir'])
+    # ------------------ тестовый режим -------------------------------------
+    if cfg.get("test_mode", False):
+        test_dir = Path(cfg["test_images_dir"])
         logging.info(f"Test mode ON: processing images from {test_dir}")
         for img in sorted(test_dir.iterdir()):
-            if img.suffix.lower() in ['.jpg', '.png']:
+            if img.suffix.lower() in [".jpg", ".png"]:
                 handler.process_jpg(img)
         return
 
+    # ------------------ production-режим -----------------------------------
     observer = Observer()
-    observer.schedule(handler, path=cfg['input_dir'], recursive=False)
+    observer.schedule(handler, path=cfg["input_dir"], recursive=False)
     observer.start()
     logging.info(f"Watching {cfg['input_dir']} for .pic files…  Ctrl+C to stop.")
     try:
@@ -130,5 +162,5 @@ def main():
     observer.join()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
