@@ -22,8 +22,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from src.preprocessing import DistortionCorrector, PerspectiveTransformer
-from src.inference import ONNXInference
-
+from src.inference import Yolov8SegONNX
 
 class PipelineHandler(FileSystemEventHandler):
     def __init__(self, cfg: dict):
@@ -37,8 +36,7 @@ class PipelineHandler(FileSystemEventHandler):
         self.dist_corr = DistortionCorrector(cfg)
         self.persp = PerspectiveTransformer(cfg)
 
-        # ONNX‑инференс (GPU/CPU via providers)
-        self.inferer = ONNXInference(cfg_path=cfg['config_path'])
+        self.seg = Yolov8SegONNX(cfg)
 
     # production: callback when .pic closed
     def on_closed(self, event):
@@ -80,16 +78,24 @@ class PipelineHandler(FileSystemEventHandler):
             undist = self.dist_corr.correct(frame)
             # 2) Perspective warp
             warped, scale = self.persp.transform(undist)
-            warped_path = self.output_dir / f"{jpg_path.stem}_warped.jpg"
+
+            warped_path = self.output_dir / f"{jpg_path.stem}_warped.png"
             cv2.imwrite(str(warped_path), warped)
-            # 3) ONNX inference
-            result = self.inferer.infer(str(warped_path))
-            result['scale'] = scale
-            # 4) Save JSON
-            jpath = self.output_dir / f"{jpg_path.stem}.json"
-            with open(jpath, 'w') as jf:
-                json.dump(result, jf, ensure_ascii=False, indent=2)
-            logging.info(f"Result saved: {jpath.name}")
+
+            # 3) SEGMENTATION
+            mask, overlay = self.seg(warped)
+            if mask is None:
+                logging.warning(f"No mask found for {jpg_path.name}")
+                return
+
+            # ---------- сохранение ----------
+            mask_path = self.output_dir / f"{jpg_path.stem}_mask.png"
+            cv2.imwrite(str(mask_path), mask)
+
+            if overlay is not None:
+                dbg_path  = self.output_dir / f"{jpg_path.stem}_overlay.jpg"
+                cv2.imwrite(str(dbg_path), overlay)
+
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")
 

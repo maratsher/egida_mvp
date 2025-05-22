@@ -2,7 +2,7 @@
 input_dir: ./test_images              # где слушаем .pic
 output_dir: ./results
 test_mode: true             # или false
-test_images_dir: ./test_images    # папка с тестовыми изображениями    
+test_images_dir: ./test    # папка с тестовыми изображениями    
 camera_matrix:
   - [8049.984331021995, 0.0, 1470.9594033192748]
   - [0.0, 8031.233316708024, 1172.2674105508036]
@@ -14,17 +14,17 @@ dist_coefs:
      0.013396845602165934,
     -7.11612361852026 ]
 perspective_points:
-  TL: [349, 244]
-  BL: [438, 1682]
-  TR: [3638, 312]
-  BR: [3502, 1756]
+  TL: [177, 494]
+  BL: [285, 1716]
+  TR: [3073, 482]
+  BR: [2993, 1699]
 real_width: 283.0    # см
 real_height: 138.0 # см
 
-# ONNX → TensorRT
-onnx_path:        ./weights/mask_rcnn_r50fpn3x_1333_800_bs1_fixed.onnx
-input_shape: [3, 800, 800]
-providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]   # сначала GPU
-debug: true
-debug_output: ./debug
-overlay_color: [0, 255, 0]
+# onnx-инференс
+onnx_model: ./weights/yolo8l_seg_1024_220525.onnx
+imgsz: 1024
+conf_thres: 0.7
+iou_thres: 0.5
+device: 0                 # GPU ID
+debug: true               # сохранять overlay *.jpg

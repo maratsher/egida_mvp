@@ -1,105 +1,148 @@
-import os
-import yaml
+# src/inference/onnx_inf.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
 import cv2
 import numpy as np
 import onnxruntime as ort
+import torch
 from pathlib import Path
+from typing import Tuple, Optional
+
+from ultralytics.utils import ops
+from ultralytics.utils import YAML
+from ultralytics.utils.checks import check_yaml
 
 
-class ONNXInference:
+class Yolov8SegONNX:
     """
-    Инференс Mask R-CNN (Detectron2 → ONNX).
-    Принимает любые BGR-изображения float32 0-255 без нормализации и без ресайза.
+    Инференс YOLOv8-Seg (ONNX Runtime).
+    Возвращает одну бинарную маску (uint8 0/255) с максимальным confidence
+    и оверлей для отладки.
     """
 
-    def __init__(self, cfg_path: str | Path):
-        cfg = yaml.safe_load(open(cfg_path, 'r'))
-        self.onnx_path  = cfg['onnx_path']
-        self.providers  = cfg.get('providers',
-                                  ["CUDAExecutionProvider", "CPUExecutionProvider"])
-        self.debug      = bool(cfg.get('debug', False))
-        self.debug_dir  = cfg.get('debug_output', './debug')
-        os.makedirs(self.debug_dir, exist_ok=True)
-        self.color      = tuple(cfg.get('overlay_color', [0, 255, 0]))  # BGR
-
-        # ONNX Runtime с динамическим H×W
-        self.session    = ort.InferenceSession(self.onnx_path,
-                                               providers=self.providers)
-        self.input_name = self.session.get_inputs()[0].name
-        self.out_names  = [o.name for o in self.session.get_outputs()]
-
-    # ──────────────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _preprocess(img_bgr: np.ndarray) -> np.ndarray:
-        """
-        Подготавливает тензор 1×3×H×W (float32, BGR, 0-255).
-        Никакого изменения размера и нормализации не выполняется.
-        """
-        img_f = img_bgr.astype(np.float32)
-        inp = np.transpose(img_f, (2, 0, 1))[None]   # 1×3×H×W
-        return inp
-
-    # ──────────────────────────────────────────────────────────────────────────
-    def infer(self, image_path: str | Path,
-              conf_thr: float = 0.5,
-              mask_thr: float = 0.5,
-              alpha: float = 0.35) -> dict:
-        """Возвращает dict с полями boxes, scores, classes."""
-        img = cv2.imread(str(image_path))
-        if img is None:
-            raise FileNotFoundError(image_path)
-
-        inp = self._preprocess(img)
-        boxes, scores, classes, masks = self.session.run(
-            self.out_names, {self.input_name: inp}
+    # ------------------------------------------------------------------ #
+    #  ИНИЦИАЛИЗАЦИЯ                                                     #
+    # ------------------------------------------------------------------ #
+    def __init__(self, cfg: dict):
+        self.model_path: str | Path = cfg["onnx_model"]
+        self.imgsz: Tuple[int, int] = (
+            (cfg.get("imgsz"), cfg.get("imgsz"))
+            if isinstance(cfg.get("imgsz"), int)
+            else tuple(cfg.get("imgsz", [640, 640]))
         )
+        self.conf: float = cfg.get("conf_thres", 0.25)
+        self.iou: float = cfg.get("iou_thres", 0.7)
+        self.device: int | None = cfg.get("device", 0)
+        self.debug: bool = bool(cfg.get("debug", False))
+        self.nc: int = int(cfg.get("nc", 1))
+        self.overlay_color: Tuple[int, int, int] = tuple(
+            cfg.get("overlay_color", [0, 255, 0])
+        )  # BGR
 
-        boxes   = boxes.astype(np.float32)   # (N, 4)  — XYXY
-        scores  = scores.astype(np.float32)  # (N,)
-        classes = classes.astype(np.int32)   # (N,)
-        masks   = masks[:, 0]                # (N, 28, 28) логиты 0-1
+        # ONNX Runtime session
+        providers, provider_options = (["CPUExecutionProvider"], None)
+        if torch.cuda.is_available():
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            provider_options = [{"device_id": str(self.device)}, {}]
 
-        print(classes, flush=True)
-        print(masks, flush=True)
-        print(scores, flush=True)
+        self.session = ort.InferenceSession(
+            str(self.model_path),
+            providers=providers,
+            provider_options=provider_options,
+        )
+        self.input_name = self.session.get_inputs()[0].name
 
+        # class names (не обязательны, но полезны)
+        #self.names = YAML.load(check_yaml("coco8.yaml"))["names"]
 
-        keep_boxes, keep_scores, keep_classes = [], [], []
-        overlay = img.copy() if self.debug else None
-        H, W = img.shape[:2]
+    # ------------------------------------------------------------------ #
+    #  ГЛАВНЫЙ ВХОД                                                      #
+    # ------------------------------------------------------------------ #
+    def __call__(self, img_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        prep, r_info = self._preprocess(img_bgr)
+        pred, protos = self.session.run(None, {self.input_name: prep})
+        mask = self._postprocess(img_bgr, pred, protos, r_info)
+        if mask is None:
+            return None, None
+        overlay = self._draw_overlay(img_bgr, mask)
+        return mask, overlay
 
-        for box, score, cls, m28 in zip(boxes, scores, classes, masks):
-            if score < conf_thr:
-                continue
+    # ------------------------------------------------------------------ #
+    #  ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ                                            #
+    # ------------------------------------------------------------------ #
+    def _letterbox(self, im: np.ndarray, new_shape: Tuple[int, int]):
+        h0, w0 = im.shape[:2]
+        nh, nw = new_shape
+        r = min(nh / h0, nw / w0)
+        hw_new = (int(round(w0 * r)), int(round(h0 * r)))
+        dw, dh = nw - hw_new[0], nh - hw_new[1]
+        dw /= 2
+        dh /= 2
 
-            # Координаты уже даны в масштабе исходного изображения
-            x1, y1, x2, y2 = map(int, box)
-            x1, y1 = max(x1, 0), max(y1, 0)
-            x2, y2 = min(x2, W), min(y2, H)
-            if x2 <= x1 or y2 <= y1:
-                continue
+        if (w0, h0) != hw_new:
+            im = cv2.resize(im, hw_new, interpolation=cv2.INTER_LINEAR)
+        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+        im = cv2.copyMakeBorder(im, top, bottom, left, right,
+                                cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        return im, r, dw, dh
 
-            box_w, box_h = x2 - x1, y2 - y1
-            mask = cv2.resize(m28, (box_w, box_h), cv2.INTER_LINEAR)
-            mask_bin = (mask > mask_thr).astype(np.uint8)
-            if mask_bin.sum() == 0:
-                continue
+    def _preprocess(self, img_bgr: np.ndarray):
+        img, r, dw, dh = self._letterbox(img_bgr, self.imgsz)
+        img = img[..., ::-1].transpose(2, 0, 1)          # BGR→RGB, HWC→CHW
+        img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
+        return img[None, ...], (r, dw, dh, img_bgr.shape[:2])
 
-            keep_boxes.append([x1, y1, x2, y2])
-            keep_scores.append(float(score))
-            keep_classes.append(int(cls))
+    def _postprocess(
+        self,
+        img_bgr: np.ndarray,
+        preds: np.ndarray,
+        protos: np.ndarray,
+        r_info,
+    ) -> Optional[np.ndarray]:
+        r, dw, dh, (h0, w0) = r_info
 
-            if overlay is not None:
-                color = np.array(self.color, dtype=np.uint8)
-                roi = overlay[y1:y2, x1:x2]
-                roi[mask_bin == 1] = (
-                    roi[mask_bin == 1] * (1 - alpha) + color * alpha
-                ).astype(np.uint8)
+        # --- фикс: добавляем размерность batch, если её нет ----
+        preds_t = torch.from_numpy(preds).float()
+        if preds_t.ndim == 2:            # (N, dim)  → (1, N, dim)
+            preds_t = preds_t.unsqueeze(0)
 
-        if overlay is not None:
-            out_name = Path(self.debug_dir) / Path(image_path).name
-            cv2.imwrite(str(out_name), overlay)
+        protos_t = torch.from_numpy(protos[0]).float()   # (c, mh, mw)
 
-        return {"boxes": keep_boxes,
-                "scores": keep_scores,
-                "classes": keep_classes}
+        det_list = ops.non_max_suppression(
+            preds_t, self.conf, self.iou, nc=self.nc
+        )
+        dets = det_list[0]
+        if dets is None or not len(dets):
+            return None
+
+        # берём только самую уверенную детекцию
+        dets = dets[dets[:, 4].argmax().unsqueeze(0)]
+        dets[:, :4] = ops.scale_boxes(self.imgsz, dets[:, :4], (h0, w0))
+
+        masks = self._mask_from_proto(
+            protos_t, dets[:, 6:], dets[:, :4], (h0, w0)
+        )
+        return (masks[0].cpu().numpy().astype(np.uint8) * 255)  # (H,W)
+
+    @staticmethod
+    def _mask_from_proto(
+        protos: torch.Tensor,
+        mcoef: torch.Tensor,
+        bboxes: torch.Tensor,
+        img_shape: Tuple[int, int],
+    ) -> torch.Tensor:
+        c, mh, mw = protos.shape
+        masks = (mcoef @ protos.reshape(c, -1)).reshape(-1, mh, mw)
+        masks = ops.scale_masks(masks[None], img_shape)[0]
+        masks = ops.crop_mask(masks, bboxes)
+        return masks.gt_(0.0)
+
+    def _draw_overlay(self, img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        color = np.array(self.overlay_color, dtype=np.uint8)
+        overlay = img.copy()
+        overlay[mask == 255] = 0.4 * overlay[mask == 255] + 0.6 * color
+        return overlay.astype(np.uint8)
