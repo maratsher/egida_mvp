@@ -2,7 +2,11 @@
 input_dir: ./test_images              # где слушаем .pic
 output_dir: ./results
 test_mode: true             # или false
-test_images_dir: ./test    # папка с тестовыми изображениями    
+test_images_dir: ./test_def    # папка с тестовыми изображениями    
+
+# Общинге настройки
+device: 0                 # GPU ID
+debug: true               # сохранять overlay *.jpg
 
 # Препроцесснг
 camera_matrix:
@@ -23,19 +27,28 @@ perspective_points:
 real_width: 283.0    # см
 real_height: 138.0 # см
 
-# onnx-инференс
-onnx_model: ./weights/yolo8l_seg_1024_220525.onnx
-imgsz: 1024
-conf_thres: 0.7
-iou_thres: 0.5
-device: 0                 # GPU ID
-debug: true               # сохранять overlay *.jpg
+
+models:
+  profile:
+    onnx_model: ./weights/yolo8l_seg_1024_220525.onnx
+    num_classes: 1
+    conf_thres: 0.7
+    iou_thres: 0.5
+    imgsz: 1024
+    combine: best
+  defect:
+    onnx_model: ./weights/yolo8l_seg_def_1024_280525.onnx
+    num_classes: 2
+    conf_thres: 0.25
+    iou_thres: 0.4
+    imgsz: 1024
+    combine: union
 
 # отрисовка метрик
 font_scale: 1.5
 font_thickness: 3
 overlay_color: [0, 0, 0]
 
-width_threshold: 0.95          # T из шага 2 (0.8 = 80 %)
+width_threshold: 0.98          # T из шага 2 (0.8 = 80 %)
 color_first:  [0, 255, 0]     # BGR-цвет 1-го сорта
 color_second: [0, 200, 255]   # BGR-цвет 2-го сорта (оранжевый)

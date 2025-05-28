@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Подсчёт метрик профиля + визуализация (1-й / 2-й сорт).
+Подсчёт метрик профиля + визуализация (1-й / 2-й сорт)
+с центрированной подписью внутри детали.
 """
 from __future__ import annotations
 
@@ -23,8 +24,8 @@ class ProfileMetrics:
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.fs = font_scale
         self.th = thickness
-        self.c1 = tuple(int(x) for x in color_first)     # 1-й сорт
-        self.c2 = tuple(int(x) for x in color_second)    # 2-й сорт
+        self.c1 = tuple(int(x) for x in color_first)
+        self.c2 = tuple(int(x) for x in color_second)
 
     # ------------------------------------------------------------------ #
     def __call__(
@@ -38,30 +39,25 @@ class ProfileMetrics:
             overlay = warped_img.copy()
 
         H, W = mask.shape
-
-        # ---------- 1. горизонтальная проекция -------------------------
         row_sum = mask.sum(axis=1) // 255
         Wmax = row_sum.max()
         if Wmax == 0:
             return {}, overlay
 
-        # ---------- 2. поиск границы 1-го сорта ------------------------
         boundary_row = next(
             (i for i, s in enumerate(row_sum) if s >= self.T * Wmax), 0
         )
 
-        # ---------- 3. делим маску ------------------------------------
         mask_second = np.zeros_like(mask)
         mask_second[:boundary_row, :] = mask[:boundary_row, :]
         mask_first = mask.copy()
         mask_first[:boundary_row, :] = 0
 
-        # ---------- 4. bounding-box всего профиля ---------------------
+        # -------- метрики -------------------------------------------------
         x, y, w_box, h_box = cv2.boundingRect(mask)
         width_cm  = w_box / scale
         height_cm = h_box / scale
 
-        # ---------- 5. площади ----------------------------------------
         area_px_total   = mask.sum()          // 255
         area_px_first   = mask_first.sum()    // 255
         area_px_second  = mask_second.sum()   // 255
@@ -87,37 +83,47 @@ class ProfileMetrics:
             "second_pct":     second_pct,
         }
 
-        # ---------- 6. визуализация -----------------------------------
+        # -------- визуализация -------------------------------------------
         alpha = 0.45
         out = overlay.copy()
 
-        # заливка 1-го сорта
         c1_arr = np.array(self.c1, dtype=np.uint8)
         out[mask_first == 255] = (
             (1 - alpha) * out[mask_first == 255] + alpha * c1_arr
         )
 
-        # заливка 2-го сорта
         c2_arr = np.array(self.c2, dtype=np.uint8)
         out[mask_second == 255] = (
             (1 - alpha) * out[mask_second == 255] + alpha * c2_arr
         )
 
-        # линия границы
-        #cv2.line(out, (0, boundary_row), (W - 1, boundary_row), (255, 0, 0), 2)
+        cv2.line(out, (0, boundary_row), (W - 1, boundary_row), (255, 0, 0), 2)
 
-        # ---------- 7. подписи ----------------------------------------
-        line1 = (
-            f"W={metrics['width_cm']}cm  "
-            f"H={metrics['height_cm']}cm  "
-            f"S={metrics['area_total_m2']}m2"
-        )
-        line2 = (
-            f"1_sort: {metrics['first_pct']}%   "
-            f"2_sort: {metrics['second_pct']}%"
-        )
+        # -------- центр подписи ------------------------------------------
+        cx = x + w_box // 2
+        cy = y + h_box // 2
 
-        cv2.putText(out, line1, (20, 50), self.font, self.fs, (0, 0, 0), self.th, cv2.LINE_AA)
-        cv2.putText(out, line2, (20, 95), self.font, self.fs, (0, 0, 0), self.th, cv2.LINE_AA)
+        line1 = f"W={metrics['width_cm']}cm  H={metrics['height_cm']}cm  S={metrics['area_total_m2']}m2"
+        line2 = f"1_sort: {metrics['first_pct']}%   2_sort: {metrics['second_pct']}%"
+
+        # размеры текста
+        (w1, h1), base1 = cv2.getTextSize(line1, self.font, self.fs, self.th)
+        (w2, h2), base2 = cv2.getTextSize(line2, self.font, self.fs, self.th)
+
+        # координаты: центрируем по X, делаем небольшой вертикальный сдвиг
+        y1 = int(cy - h2 * 0.8)          # чуть выше центра
+        y2 = int(cy + h1 * 1.2)          # чуть ниже центра
+
+        x1 = int(cx - w1 / 2)
+        x2 = int(cx - w2 / 2)
+
+        # не даём выйти за границы изображения
+        x1 = max(10, min(x1, W - w1 - 10))
+        x2 = max(10, min(x2, W - w2 - 10))
+        y1 = max(h1 + 10, min(y1, H - 10))
+        y2 = max(h2 + 10, min(y2, H - 10))
+
+        cv2.putText(out, line1, (x1, y1), self.font, self.fs, (0, 0, 0), self.th, cv2.LINE_AA)
+        cv2.putText(out, line2, (x2, y2), self.font, self.fs, (0, 0, 0), self.th, cv2.LINE_AA)
 
         return metrics, out

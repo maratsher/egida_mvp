@@ -1,21 +1,24 @@
-# CUDA Runtime с Ubuntu 22.04
+# ── Базовый образ: минимальный CUDA-рантайм + Ubuntu 22.04 ──────────────
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
-# Системные зависимости
-RUN apt-get update && apt-get install -y \
-    python3-pip libgl1 libglib2.0-0 && \
-    rm -rf /var/lib/apt/lists/*
-
-# --- python ---
-# 1) onnxruntime-gpu тащит себе numpy-1.26.x как зависимость
-RUN pip3 install --no-cache-dir onnx onnxruntime-gpu==1.22.0 
-
-# 2) гарантируем, что версия numpy < 2
-RUN pip3 install --no-cache-dir 'numpy<2.0' pyyaml watchdog opencv-python-headless
-
-# Код приложения
+ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
-COPY ./ /app
 
-# Запуск пакета src
-ENTRYPOINT ["python3", "-m", "src"]
+# ── Системные зависимости (OpenCV, build-tools) ─────────────────────────
+RUN apt-get update && apt-get install -y \
+    python3-pip python3-dev build-essential git \
+    libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --upgrade pip
+
+# ── Python-зависимости ──────────────────────────────────────────────────
+#  Отдельно кладём requirements.txt, чтобы слоё сохранялся при изменении кода.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Копируем исходники ──────────────────────────────────────────────────
+COPY . .
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python3", "-m", "src"]

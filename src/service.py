@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Основной сервис:
-  • production-режим — слушает папку с .pic, извлекает последний JPEG и запускает весь пайплайн.
-  • test_mode       — обходит изображения в test_images_dir и выполняет тот же пайплайн.
-
-Результаты (JSON + маска + overlay + warped) сохраняются в output_dir.
+Сервис: слушает .pic, делает две сегментации (профиль + дефекты) и
+сохраняет результаты. Метрики профиля остаются как раньше.
 """
-import time
-import json
-import yaml
-import logging
-import mmap
+import time, json, yaml, logging, mmap
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -26,109 +19,101 @@ from src.postprocessing import ProfileMetrics
 
 
 # --------------------------------------------------------------------------- #
-#  Обработчик файлов .pic                                                     #
-# --------------------------------------------------------------------------- #
 class PipelineHandler(FileSystemEventHandler):
     def __init__(self, cfg: dict):
         super().__init__()
         self.cfg = cfg
-        self.input_dir = Path(cfg["input_dir"])
+        mdl_prof = cfg["models"]["profile"]
+        mdl_def  = cfg["models"]["defect"]
+        self.input_dir  = Path(cfg["input_dir"])
         self.output_dir = Path(cfg.get("output_dir", "./results"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- подготовка стадий ---
+        # ── стадии ───────────────────────────────────────────────────────
         self.dist_corr = DistortionCorrector(cfg)
-        self.persp = PerspectiveTransformer(cfg)
-        self.seg = Yolov8SegONNX(cfg)
+        self.persp     = PerspectiveTransformer(cfg)
+
+        # две модели YOLOv8-Seg
+        self.seg_profile = Yolov8SegONNX({**cfg, **mdl_prof})
+        self.seg_defect  = Yolov8SegONNX({**cfg, **mdl_def})
+
+        # пост-процессинг профиля
         self.post = ProfileMetrics(
             width_threshold=cfg.get("width_threshold", 0.8),
-            font_scale=cfg.get("font_scale", 1.2),
-            thickness=cfg.get("font_thickness", 2),
-            color_first=tuple(cfg.get("color_first",  [0, 255, 0])),
-            color_second=tuple(cfg.get("color_second", [0, 165, 255])),
+            font_scale     =cfg.get("font_scale",     1.2),
+            thickness      =cfg.get("font_thickness", 2),
+            color_first    =tuple(cfg.get("color_first",  [0, 255, 0])),
+            color_second   =tuple(cfg.get("color_second", [0, 165, 255])),
         )
 
-    # -------------------- production-callback ------------------------------
+    # -------------------- production-callback ---------------------------
     def on_closed(self, event):
         src = Path(event.src_path)
         if src.suffix.lower() != ".pic":
             return
-
-        # ждём, пока файл полностью запишется
         size_prev = -1
         while src.stat().st_size != size_prev:
             size_prev = src.stat().st_size
             time.sleep(0.1)
-
         jpg = self.extract_last_jpeg(src)
         if not jpg:
             logging.error(f"JPEG not found in {src.name}")
             return
-
         logging.info(f"Extracted JPEG: {jpg.name}")
         self.process_jpg(jpg)
 
-    # ------------------------ helpers --------------------------------------
+    # ------------------------ helpers -----------------------------------
     def extract_last_jpeg(self, pic_path: Path) -> Optional[Path]:
-        with open(pic_path, "rb") as f, mmap.mmap(
-            f.fileno(), 0, access=mmap.ACCESS_READ
-        ) as mm:
-            end = mm.rfind(b"\xFF\xD9")
-            if end == -1:
-                return None
-            start = mm.rfind(b"\xFF\xD8", 0, end)
-            if start == -1:
-                return None
-
+        with open(pic_path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            end = mm.rfind(b"\xFF\xD9");  start = mm.rfind(b"\xFF\xD8", 0, end)
+            if end == -1 or start == -1: return None
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            out_name = f"{pic_path.stem}_{ts}.jpg"
-            out_path = self.output_dir / out_name
-            with open(out_path, "wb") as o:
-                o.write(mm[start : end + 2])
-            return out_path
+            out = self.output_dir / f"{pic_path.stem}_{ts}.jpg"
+            with open(out, "wb") as o: o.write(mm[start:end+2])
+            return out
 
-    # -------------------- основной пайплайн --------------------------------
+    # -------------------- основной пайп-лайн ----------------------------
     def process_jpg(self, jpg_path: Path):
         try:
-            # 1) Коррекция дисторсии
-            frame = cv2.imread(str(jpg_path))
+            # 1) undistort
+            frame  = cv2.imread(str(jpg_path))
             undist = self.dist_corr.correct(frame)
 
-            # 2) Перспективное выравнивание
+            # 2) perspective
             warped, scale = self.persp.transform(undist)
-            cv2.imwrite(
-                str(self.output_dir / f"{jpg_path.stem}_warped.png"), warped
-            )
+            cv2.imwrite(str(self.output_dir / f"{jpg_path.stem}_warped.png"), warped)
 
-            # 3) Сегментация
-            mask, overlay = self.seg(warped)
-            if mask is None:
-                logging.warning(f"No mask found for {jpg_path.name}")
+            # 3-а) сегментация профиля
+            mask_prof, overlay_prof = self.seg_profile(warped)
+            if mask_prof is None:
+                logging.warning(f"No profile mask for {jpg_path.name}")
                 return
 
-            # 4) Пост-процессинг (метрики + финальный overlay)
-            metrics, overlay = self.post(mask, scale, warped, overlay)
+            # 3-б) сегментация дефектов
+            mask_def, overlay_def = self.seg_defect(warped)
+            # (mask_def может быть None, это ОК – просто нет дефектов)
 
-            # 5) Сохранения
-            cv2.imwrite(
-                str(self.output_dir / f"{jpg_path.stem}_mask.png"), mask
-            )
-            cv2.imwrite(
-                str(self.output_dir / f"{jpg_path.stem}_overlay.jpg"), overlay
-            )
-            with open(
-                self.output_dir / f"{jpg_path.stem}.json", "w", encoding="utf-8"
-            ) as jf:
+            # 4) пост-процессинг профиля
+            metrics, overlay_prof = self.post(mask_prof, scale, warped, overlay_prof)
+
+            # 5) сохраняем всё
+            stem = jpg_path.stem
+            cv2.imwrite(str(self.output_dir / f"{stem}_mask_profile.png"), mask_prof)
+            cv2.imwrite(str(self.output_dir / f"{stem}_overlay_profile.jpg"), overlay_prof)
+
+            if mask_def is not None:
+                cv2.imwrite(str(self.output_dir / f"{stem}_mask_defects.png"), mask_def)
+                cv2.imwrite(str(self.output_dir / f"{stem}_overlay_defects.jpg"), overlay_def)
+
+            with open(self.output_dir / f"{stem}.json", "w", encoding="utf-8") as jf:
                 json.dump(metrics, jf, ensure_ascii=False, indent=2)
 
-            logging.info(f"{jpg_path.name}: {metrics}")
+            logging.info(f"{stem}: {metrics}")
 
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")
 
 
-# --------------------------------------------------------------------------- #
-#  Точка входа                                                                #
 # --------------------------------------------------------------------------- #
 def main():
     logging.basicConfig(
@@ -142,7 +127,6 @@ def main():
 
     handler = PipelineHandler(cfg)
 
-    # ------------------ тестовый режим -------------------------------------
     if cfg.get("test_mode", False):
         test_dir = Path(cfg["test_images_dir"])
         logging.info(f"Test mode ON: processing images from {test_dir}")
@@ -151,7 +135,6 @@ def main():
                 handler.process_jpg(img)
         return
 
-    # ------------------ production-режим -----------------------------------
     observer = Observer()
     observer.schedule(handler, path=cfg["input_dir"], recursive=False)
     observer.start()

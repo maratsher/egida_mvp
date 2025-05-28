@@ -1,35 +1,14 @@
-version: "3.9"
-
 services:
-  egida:
-    build:
-      context: .          # каталог, где лежит Dockerfile
-      dockerfile: Dockerfile
-    image: egida:latest   # тег готового образа
-    container_name: egida_service
-
-    volumes:
-      - ./results:/app/results
-      - ./debug:/app/debug
-      - ./src:/app/src
-      - ./weights/:/app/weights
-
-    ## Доступ к GPU
+  profiler:
+    build: .
+    # ── GPU ──────────────────────────────────────────────
     deploy:
       resources:
         reservations:
           devices:
-            - capabilities: [gpu]   # требуем GPU
-    # или для старого синтаксиса:
-    # runtime: nvidia
-    # environment:
-    #   - NVIDIA_VISIBLE_DEVICES=all
-
-
-    ## Рабочий каталог (совпадает с WORKDIR Dockerfile)
-    working_dir: /app
-
-    ## Перезапуск контейнера, если он падает
-    #restart: unless-stopped
-
-    ## Журналы контейнера будут выводиться в stdout
+            - driver: nvidia        # nvidia-ctk прописал runtime
+              count: all            # можно 1,2… или all
+              capabilities: [gpu]   # compute + utility по умолчанию
+    # ── тома ────────────────────────────────────────────
+    volumes:
+      - ./:/app/
