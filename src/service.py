@@ -15,7 +15,7 @@ from watchdog.events import FileSystemEventHandler
 
 from src.preprocessing import DistortionCorrector, PerspectiveTransformer
 from src.inference import Yolov8SegONNX
-from src.postprocessing import ProfileMetrics
+from src.postprocessing import ProfileMetrics, DefectMetrics
 
 
 # --------------------------------------------------------------------------- #
@@ -45,6 +45,11 @@ class PipelineHandler(FileSystemEventHandler):
             color_first    =tuple(cfg.get("color_first",  [0, 255, 0])),
             color_second   =tuple(cfg.get("color_second", [0, 165, 255])),
         )
+
+        # пост процессинг дефектов
+        def_conf = cfg["defect_classes"]
+        self.def_post = DefectMetrics(def_conf, font_scale=cfg.get("font_scale",1.0),
+                              thickness=cfg.get("font_thickness",2))
 
     # -------------------- production-callback ---------------------------
     def on_closed(self, event):
@@ -84,31 +89,40 @@ class PipelineHandler(FileSystemEventHandler):
             cv2.imwrite(str(self.output_dir / f"{jpg_path.stem}_warped.png"), warped)
 
             # 3-а) сегментация профиля
-            mask_prof, overlay_prof = self.seg_profile(warped)
+            mask_prof, ov_prof, _, _ = self.seg_profile(warped)
             if mask_prof is None:
                 logging.warning(f"No profile mask for {jpg_path.name}")
                 return
 
             # 3-б) сегментация дефектов
-            mask_def, overlay_def = self.seg_defect(warped)
+            mask_def, _, masks_nd, cls_ids = self.seg_defect(warped)
             # (mask_def может быть None, это ОК – просто нет дефектов)
 
             # 4) пост-процессинг профиля
-            metrics, overlay_prof = self.post(mask_prof, scale, warped, overlay_prof)
+            prof_metrics, ov_prof = self.post(mask_prof, scale, warped, ov_prof)
 
+            def_metrics, ov_def = {}, None
+            if mask_def is not None and masks_nd is not None:
+                def_metrics, ov_def = self.def_post(masks_nd, cls_ids, scale, warped,
+                                        prof_metrics["area_first_m2"])
             # 5) сохраняем всё
             stem = jpg_path.stem
             cv2.imwrite(str(self.output_dir / f"{stem}_mask_profile.png"), mask_prof)
-            cv2.imwrite(str(self.output_dir / f"{stem}_overlay_profile.jpg"), overlay_prof)
 
             if mask_def is not None:
                 cv2.imwrite(str(self.output_dir / f"{stem}_mask_defects.png"), mask_def)
-                cv2.imwrite(str(self.output_dir / f"{stem}_overlay_defects.jpg"), overlay_def)
 
+            cv2.imwrite(str(self.output_dir / f"{stem}_overlay_profile.jpg"), ov_prof)
+            if ov_def is not None:
+                cv2.imwrite(str(self.output_dir / f"{stem}_overlay_defects.jpg"), ov_def)
+
+            # JSON
+            all_metrics = {**prof_metrics, **def_metrics}
             with open(self.output_dir / f"{stem}.json", "w", encoding="utf-8") as jf:
-                json.dump(metrics, jf, ensure_ascii=False, indent=2)
+                json.dump(all_metrics, jf, ensure_ascii=False, indent=2)
+            
+            logging.info(f"{stem}: {all_metrics}")
 
-            logging.info(f"{stem}: {metrics}")
 
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")

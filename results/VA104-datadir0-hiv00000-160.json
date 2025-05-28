@@ -5,5 +5,7 @@
   "area_first_m2": 2.233,
   "area_second_m2": 0.175,
   "first_pct": 92.7,
-  "second_pct": 7.3
+  "second_pct": 7.3,
+  "cavity_m2": 0.012,
+  "cavity_pct": 0.56
 }

@@ -42,7 +42,7 @@ models:
     conf_thres: 0.25
     iou_thres: 0.4
     imgsz: 1024
-    combine: union
+    combine: all
 
 # отрисовка метрик
 font_scale: 1.5
@@ -52,3 +52,7 @@ overlay_color: [0, 0, 0]
 width_threshold: 0.98          # T из шага 2 (0.8 = 80 %)
 color_first:  [0, 255, 0]     # BGR-цвет 1-го сорта
 color_second: [0, 200, 255]   # BGR-цвет 2-го сорта (оранжевый)
+
+defect_classes:
+  0: {name: color,  color: [255,   0,   0]}   # красный
+  1: {name: cavity, color: [  0, 165, 255]}   # оранжевый
