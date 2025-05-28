@@ -1,0 +1,1 @@
+from .view import draw_text_ru
