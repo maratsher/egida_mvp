@@ -1,6 +1,7 @@
 numpy==1.26.4
+Pillow
 ultralytics
 opencv-python-headless
 watchdog
 pyyaml
-onnxruntime-gpu==1.17.0
+onnxruntime-gpu==1.18.0

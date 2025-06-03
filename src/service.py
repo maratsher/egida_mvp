@@ -79,54 +79,62 @@ class PipelineHandler(FileSystemEventHandler):
 
     # -------------------- основной пайп-лайн ----------------------------
     def process_jpg(self, jpg_path: Path):
+        """
+        Для production jpg_path выглядит так:
+            …/results/VA104-…_20250528_221055_123.jpg
+        stem = VA104-…_20250528_221055_123   ← в stem уже есть ts
+        Для test-режима stem = имя файла без расширения.
+        По stem создаём подпапку, куда складываем всё остальное.
+        """
         try:
+            stem = jpg_path.stem
+            out_dir = self.output_dir / stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+
             # 1) undistort
             frame  = cv2.imread(str(jpg_path))
             undist = self.dist_corr.correct(frame)
 
             # 2) perspective
             warped, scale = self.persp.transform(undist)
-            cv2.imwrite(str(self.output_dir / f"{jpg_path.stem}_warped.png"), warped)
+            cv2.imwrite(str(out_dir / "warped.png"), warped)
 
-            # 3-а) сегментация профиля
+            # 3-a) профиль
             mask_prof, ov_prof, _, _ = self.seg_profile(warped)
             if mask_prof is None:
                 logging.warning(f"No profile mask for {jpg_path.name}")
                 return
 
-            # 3-б) сегментация дефектов
+            # 3-b) дефекты
             mask_def, _, masks_nd, cls_ids = self.seg_defect(warped)
-            # (mask_def может быть None, это ОК – просто нет дефектов)
 
-            # 4) пост-процессинг профиля
+            # 4) пост-процессинг
             prof_metrics, ov_prof = self.post(mask_prof, scale, warped, ov_prof)
 
             def_metrics, ov_def = {}, None
             if mask_def is not None and masks_nd is not None:
-                def_metrics, ov_def = self.def_post(masks_nd, cls_ids, scale, warped,
-                                        prof_metrics["area_first_m2"])
-            # 5) сохраняем всё
-            stem = jpg_path.stem
-            cv2.imwrite(str(self.output_dir / f"{stem}_mask_profile.png"), mask_prof)
+                def_metrics, ov_def = self.def_post(
+                    masks_nd, cls_ids, scale, warped, prof_metrics["area_first_m2"]
+                )
+
+            # 5) сохранения
+            cv2.imwrite(str(out_dir / "mask_profile.png"),   mask_prof)
+            cv2.imwrite(str(out_dir / "overlay_profile.jpg"), ov_prof)
 
             if mask_def is not None:
-                cv2.imwrite(str(self.output_dir / f"{stem}_mask_defects.png"), mask_def)
-
-            cv2.imwrite(str(self.output_dir / f"{stem}_overlay_profile.jpg"), ov_prof)
+                cv2.imwrite(str(out_dir / "mask_defects.png"),   mask_def)
             if ov_def is not None:
-                cv2.imwrite(str(self.output_dir / f"{stem}_overlay_defects.jpg"), ov_def)
+                cv2.imwrite(str(out_dir / "overlay_defects.jpg"), ov_def)
 
             # JSON
-            all_metrics = {**prof_metrics, **def_metrics}
-            with open(self.output_dir / f"{stem}.json", "w", encoding="utf-8") as jf:
-                json.dump(all_metrics, jf, ensure_ascii=False, indent=2)
-            
-            logging.info(f"{stem}: {all_metrics}")
+            with open(out_dir / "metrics.json", "w", encoding="utf-8") as jf:
+                json.dump({**prof_metrics, **def_metrics},
+                        jf, ensure_ascii=False, indent=2)
 
+            logging.info(f"{stem}: {prof_metrics | def_metrics}")
 
         except Exception as e:
             logging.exception(f"Error processing {jpg_path.name}: {e}")
-
 
 # --------------------------------------------------------------------------- #
 def main():
@@ -150,7 +158,7 @@ def main():
         return
 
     observer = Observer()
-    observer.schedule(handler, path=cfg["input_dir"], recursive=False)
+    observer.schedule(handler, path=str(Path(cfg["input_dir"]).resolve()), recursive=True)
     observer.start()
     logging.info(f"Watching {cfg['input_dir']} for .pic files…  Ctrl+C to stop.")
     try:

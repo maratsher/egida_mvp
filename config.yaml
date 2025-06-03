@@ -1,7 +1,7 @@
 # Папки
-input_dir: ./test_images              # где слушаем .pic
+input_dir: /va104              # где слушаем .pic
 output_dir: ./results
-test_mode: true             # или false
+test_mode: false             # или false
 test_images_dir: ./test_def    # папка с тестовыми изображениями    
 
 # Общинге настройки
@@ -20,10 +20,10 @@ dist_coefs:
      0.013396845602165934,
     -7.11612361852026 ]
 perspective_points:
-  TL: [177, 494]
-  BL: [285, 1716]
-  TR: [3073, 482]
-  BR: [2993, 1699]
+  TL: [346, 300]
+  BL: [428, 1680]
+  TR: [3633, 377]
+  BR: [3501, 1756]
 real_width: 283.0    # см
 real_height: 138.0 # см
 
