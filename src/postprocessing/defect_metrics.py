@@ -1,95 +1,65 @@
+# src/postprocessing/defect_metrics.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Подсчёт площадей дефектов + overlay-легенда.
+Закраска дефектов + расчёт площадей.
+• Площадь каждого класса → **см²**.
+• Доля (%) считается по площади 1-го сорта.
+Названия можно задавать короче прямо в `config.yaml`,
+например «Дефект перех. блок», «Трещины».
 """
 from __future__ import annotations
-import cv2, numpy as np
+
 from typing import Dict, List, Tuple
-from PIL import ImageFont
-from src.utils import draw_text_ru
+import cv2
+import numpy as np
 
 
 class DefectMetrics:
     def __init__(
         self,
-        class_conf: Dict[int, dict],
-        font_scale: float = 1.2,
-        thickness: int = 2,
-        font_path: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        class_conf: Dict[int, dict],   # {id: {"name": str, "color": [B,G,R]}}
+        alpha: float = 0.45,           # прозрачность заливки
     ):
-        self.cls = {int(k): v for k, v in class_conf.items()}
-        self.alpha = 0.45
-        self.th = thickness
-        self.font_size = int(24 * font_scale)
-        try:
-            self.pil_font = ImageFont.truetype(font_path, size=self.font_size)
-        except OSError:
-            self.pil_font = ImageFont.load_default()
+        self.cls   = {int(k): v for k, v in class_conf.items()}
+        self.alpha = alpha
 
     # ------------------------------------------------------------------ #
     def __call__(
         self,
-        masks: np.ndarray,           # (N,H,W) uint8 0/255
-        cls_ids: List[int],
-        scale: float,
-        base_overlay: np.ndarray,
-        area_first_m2: float,        # ← площадь «1-го сорта» из ProfileMetrics
+        masks: np.ndarray,             # (N,H,W) uint8 0/255
+        cls_ids: List[int],            # классы длиной N
+        scale: float,                  # px / см
+        base_overlay: np.ndarray,      # BGR-изображение
+        area_first_m2: float,          # площадь 1-го сорта (м²)
     ) -> Tuple[Dict[str, float], np.ndarray]:
 
         overlay = base_overlay.copy()
         metrics: Dict[str, float] = {}
-        legend_items: list[Tuple[str, str, Tuple[int, int, int]]] = []
-        # формат: (подпись, area_m2_str, цвет)
+
+        if masks is None or len(masks) == 0:
+            return metrics, overlay
+
+        # перевод для процента: 1-й сорт м² → см²
+        area_first_cm2 = area_first_m2 * 10_000
 
         for cid in sorted(set(cls_ids)):
             cls_mask = np.any(masks[np.array(cls_ids) == cid], axis=0)
             if not cls_mask.any():
                 continue
 
-            color_bgr = np.array(self.cls[cid]["color"], dtype=np.uint8)
+            color_bgr = tuple(int(c) for c in self.cls[cid]["color"])
             overlay[cls_mask] = (
-                (1 - self.alpha) * overlay[cls_mask] + self.alpha * color_bgr
+                (1 - self.alpha) * overlay[cls_mask] + self.alpha * np.array(color_bgr, np.uint8)
             )
 
-            pixels = cls_mask.astype(np.float64).sum()
-            area_m2 = pixels / (scale * scale) / 10_000          # px² → м²
-            pct = None
-            if area_first_m2 > 0:
-                pct = round(100 * area_m2 / area_first_m2, 2)
+            # площадь дефекта, см²
+            pixels = float(cls_mask.sum())
+            area_cm2 = pixels / (scale * scale)             # px² / (px/cm)²
+            pct = round(100 * area_cm2 / area_first_cm2, 2) if area_first_cm2 > 0 else None
 
-            name = self.cls[cid]["name"]
-            metrics[f"{name}_m2"] = round(area_m2, 3)
+            name = self.cls[cid]["name"]                    # уже «короткое» имя
+            metrics[f"{name}_cm2"] = round(area_cm2, 1)
             metrics[f"{name}_pct"] = pct if pct is not None else "-"
-
-            pct_text = f"{pct}%" if pct is not None else "—"
-            legend_items.append(
-                (f"{name}: {pct_text} ({area_m2:.3f} м²)", color_bgr)
-            )
-
-        # ---------- карточки-легенды -----------------------------------
-        y, pad, sq = 60, 6, 20
-        for text, color_bgr in legend_items:
-            tw, th = self.pil_font.getbbox(text)[2:]
-            card_h = max(th, sq) + pad * 2
-            card_w = sq + pad * 3 + tw
-
-            cv2.rectangle(overlay, (25, y), (25 + card_w, y + card_h), (255, 255, 255), -1)
-            cv2.rectangle(
-                overlay,
-                (25 + pad, y + (card_h - sq) // 2),
-                (25 + pad + sq, y + (card_h - sq) // 2 + sq),
-                tuple(map(int, color_bgr)),      # ← было: color_bgr
-                -1,
-            )
-            overlay = draw_text_ru(
-                overlay,
-                text,
-                (25 + pad * 2 + sq, y + (card_h - th) // 2),
-                font_size=self.font_size,
-                color_bgr=(0, 0, 0),
-                stroke_width=0,
-            )
-            y += card_h + 10
 
         return metrics, overlay
