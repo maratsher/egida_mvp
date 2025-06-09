@@ -1,7 +1,7 @@
 # Папки
 input_dir: /va104              # где слушаем .pic
 output_dir: ./results
-test_mode: false             # или false
+test_mode: true             # или false
 test_images_dir: ./test_def    # папка с тестовыми изображениями    
 
 # Общинге настройки
@@ -20,10 +20,19 @@ dist_coefs:
      0.013396845602165934,
     -7.11612361852026 ]
 perspective_points:
-  TL: [346, 300]
-  BL: [428, 1680]
-  TR: [3633, 377]
-  BR: [3501, 1756]
+  # TL: [346, 300]
+  # BL: [428, 1680]
+  # TR: [3633, 377]
+  # BR: [3501, 1756]
+
+  # TL: [327, 236]
+  # BL: [414, 1657]
+  # TR: [3638, 302]
+  # BR: [3501, 1745]
+  TL: [357, 252]
+  BL: [444, 1657]
+  TR: [3604, 313]
+  BR: [3469, 1741]
 real_width: 283.0    # см
 real_height: 138.0 # см
 
@@ -49,10 +58,13 @@ font_scale: 1.7
 font_thickness: 3
 overlay_color: [0, 0, 0]
 
-width_threshold: 0.99          # T из шага 2 (0.8 = 80 %)
+width_threshold: 0.98          # T из шага 2 (0.8 = 80 %)
 color_first:  [0, 255, 0]     # BGR-цвет 1-го сорта
 color_second: [0, 200, 255]   # BGR-цвет 2-го сорта (оранжевый)
 
 defect_classes:
-  0: {name: Дефекты переходных блоков,  color: [255,   0,   0]}   # красный
-  1: {name: Трещины, color: [  0, 165, 255]}   # оранжевый
+  0: {name: Переход. деф,  color: [255,   0,   0]}   # красный
+  1: {name: Трещины, color: [  0, 0, 255]}   # оранжевый
+
+panel_font_size: 50     
+panel_width_px: 850
