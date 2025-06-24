@@ -1,7 +1,7 @@
 # Папки
 input_dir: /va104              # где слушаем .pic
-output_dir: ./results
-test_mode: true             # или false
+output_dir: /results/
+test_mode: false             # или false
 test_images_dir: ./test_def    # папка с тестовыми изображениями    
 
 # Общинге настройки
@@ -29,10 +29,10 @@ perspective_points:
   # BL: [414, 1657]
   # TR: [3638, 302]
   # BR: [3501, 1745]
-  TL: [357, 252]
-  BL: [444, 1657]
-  TR: [3604, 313]
-  BR: [3469, 1741]
+  TL: [298, 207]
+  BL: [408, 1619]
+  TR: [3613, 218]
+  BR: [3497, 1656]
 real_width: 283.0    # см
 real_height: 138.0 # см
 
@@ -63,8 +63,8 @@ color_first:  [0, 255, 0]     # BGR-цвет 1-го сорта
 color_second: [0, 200, 255]   # BGR-цвет 2-го сорта (оранжевый)
 
 defect_classes:
-  0: {name: Переход. деф,  color: [255,   0,   0]}   # красный
+  0: {name: Переход,  color: [255,   0,   0]}   # красный
   1: {name: Трещины, color: [  0, 0, 255]}   # оранжевый
 
-panel_font_size: 50     
-panel_width_px: 850
+panel_font_size: 140     
+panel_width_px: 1200

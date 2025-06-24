@@ -1,5 +1,6 @@
 services:
   profiler:
+    restart: always
     build:
       context: .
       network: host
@@ -15,3 +16,4 @@ services:
     volumes:
       - ./:/app/
       - /va104:/va104
+      - /home/egida-va/results:/results/
