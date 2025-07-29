@@ -2,7 +2,7 @@
 input_dir: /va104              # где слушаем .pic
 output_dir: /results/
 test_mode: false             # или false
-test_images_dir: ./test_def    # папка с тестовыми изображениями    
+test_images_dir: /app/penoblock-photos    # папка с тестовыми изображениями    
 
 # Общинге настройки
 device: 0                 # GPU ID
@@ -19,37 +19,47 @@ dist_coefs:
     -0.014302099675147666,
      0.013396845602165934,
     -7.11612361852026 ]
-perspective_points:
-  # TL: [346, 300]
-  # BL: [428, 1680]
-  # TR: [3633, 377]
-  # BR: [3501, 1756]
+# perspective_points:
+#   TL: [298, 207]
+#   BL: [408, 1619]
+#   TR: [3613, 218]
+#   BR: [3497, 1656]
+# real_width: 283.0    # см
+# real_height: 138.0 # см
 
-  # TL: [327, 236]
-  # BL: [414, 1657]
-  # TR: [3638, 302]
-  # BR: [3501, 1745]
-  TL: [298, 207]
-  BL: [408, 1619]
-  TR: [3613, 218]
-  BR: [3497, 1656]
-real_width: 283.0    # см
-real_height: 138.0 # см
+perspective_points:
+  p1: [322, 226]
+  p2: [393, 1071]
+  p3: [435, 1591]
+  p4: [3638, 252]
+  p5: [3568, 1106]
+  p6: [3530, 1630]
+
+real_distances:
+  p1-p2: 79
+  p1-p3: 132.5
+  p2-p3: 53
+  p1-p4: 292
+  p2-p5: 291
+  p3-p6: 290
+  p4-p5: 79
+  p4-p6: 132.5
+  p5-p6: 53
 
 
 models:
   profile:
-    onnx_model: ./weights/yolo8l_seg_1024_220525.onnx
+    onnx_model: ./weights/yolo8l_seg_blocks_1024_300625.onnx
     num_classes: 1
     conf_thres: 0.7
     iou_thres: 0.5
     imgsz: 1024
     combine: best
   defect:
-    onnx_model: ./weights/yolo8l_seg_def_1024_280525.onnx
+    onnx_model: ./weights/yolo8l_seg_def_1024_260725.onnx
     num_classes: 2
     conf_thres: 0.25
-    iou_thres: 0.4
+    iou_thres: 0.8
     imgsz: 1024
     combine: all
 
@@ -58,7 +68,7 @@ font_scale: 1.7
 font_thickness: 3
 overlay_color: [0, 0, 0]
 
-width_threshold: 0.98          # T из шага 2 (0.8 = 80 %)
+width_threshold: 0.97          # T из шага 2 (0.8 = 80 %)
 color_first:  [0, 255, 0]     # BGR-цвет 1-го сорта
 color_second: [0, 200, 255]   # BGR-цвет 2-го сорта (оранжевый)
 
@@ -66,5 +76,5 @@ defect_classes:
   0: {name: Переход,  color: [255,   0,   0]}   # красный
   1: {name: Трещины, color: [  0, 0, 255]}   # оранжевый
 
-panel_font_size: 140     
+panel_font_size: 120   
 panel_width_px: 1200

@@ -17,3 +17,4 @@ services:
       - ./:/app/
       - /va104:/va104
       - /home/egida-va/results:/results/
+      #- /home/egida-va/egida_mvp/results:/results/

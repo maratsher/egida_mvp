@@ -30,8 +30,10 @@ def _prep_lines(prof: Dict[str, Any], defect: Dict[str, Any]) -> List[str]:
         f"H1  = {prof['H1_mm']:.0f} мм",
         f"H2  = {prof['H2_mm']:.0f} мм",
         "",
+        f"S = {prof['area_total_m2']:.2f} м²",
+        "",
         f"1-й сорт = {prof['first_pct']} %",
-        f"2-й сорт = {prof['second_pct']} %",
+        f"3-й сорт = {prof['second_pct']} %",
         "",
     ]
 

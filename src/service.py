@@ -22,7 +22,8 @@ from src.preprocessing import DistortionCorrector, PerspectiveTransformer
 from src.inference import Yolov8SegONNX
 from src.postprocessing.profile_metrics import ProfileMetrics
 from src.postprocessing.defect_metrics import DefectMetrics
-from src.utils.panel import draw_panel
+#from src.utils.panel import draw_panel
+from src.utils.panel import _prep_lines
 
 
 # --------------------------------------------------------------------------- #
@@ -56,8 +57,8 @@ class PipelineHandler(FileSystemEventHandler):
         )
 
         # параметры панели
-        self.panel_font_size = int(cfg.get("panel_font_size", 36))
-        self.panel_width_px  = int(cfg.get("panel_width_px", 500))
+        # self.panel_font_size = int(cfg.get("panel_font_size", 36))
+        # self.panel_width_px  = int(cfg.get("panel_width_px", 500))
 
     # ------------------------ helpers ----------------------------------
     def _extract_last_jpeg(self, pic_path: Path) -> Optional[Path]:
@@ -139,15 +140,21 @@ class PipelineHandler(FileSystemEventHandler):
             combined = combined.round().astype(np.uint8)
 
             # 8) рисуем правую панель с метриками
-            final = draw_panel(
-                combined,
-                prof_metrics,
-                def_metrics,
-                font_size = self.panel_font_size,
-                col_w     = self.panel_width_px,
-            )
-
+            # final = draw_panel(
+            #     combined,
+            #     prof_metrics,
+            #     def_metrics,
+            #     font_size = self.panel_font_size,
+            #     col_w     = self.panel_width_px,
+            # )
+            # 8) сохраняем оверлей без панели
+            final = combined        
+        
             # 9) сохраняем
+            txt_lines = _prep_lines(prof_metrics, def_metrics)
+            with open(out_dir / "metrics.txt", "w", encoding="utf-8") as tf:
+                tf.write("\n".join(txt_lines))
+                
             cv2.imwrite(str(out_dir / "overlay_final.jpg"), final)
             cv2.imwrite(str(out_dir / "mask_profile.png"), prof_mask)
             if def_mask is not None:
